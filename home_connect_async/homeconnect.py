@@ -19,6 +19,7 @@ from .callback_registery import CallbackRegistry
 from .appliance import Appliance
 from .auth import AuthManager
 from .api import HomeConnectApi
+from .rate_limiter import TokenBucket
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,7 +69,8 @@ class HomeConnect(DataClassJsonMixin):
         auto_update:bool=False,
         lang:str=None,
         disabled_appliances:list[str] = [],
-        sse_timeout:int=10
+        sse_timeout:int=10,
+        rate_limiter:TokenBucket|None=None,
         ) -> HomeConnect:
         """ Factory for creating a HomeConnect object - DO NOT USE THE DEFAULT CONSTRUCTOR
 
@@ -77,6 +79,11 @@ class HomeConnect(DataClassJsonMixin):
         * delayed_load - Should appliance data be loaded synchronously, within the execution of this call or skipped and called explicitly.
         * refresh - Specifies which parts of the data should be refreshed. Only applicable when json_data was provided and ignored for delayed_load.
         * auto_update - Subscribe for real-time updates to the data model, ignored for delayed_load
+        * rate_limiter - Optional ``TokenBucket`` to pace HTTP calls and stay
+          under the per-client_id daily quota. ``None`` selects the default
+          bucket (40-burst, ~1000 calls / 24 h sustained), suitable for the
+          BSH free / developer tier. Callers on paid tiers can pass a
+          custom-tuned ``TokenBucket`` instance.
 
         Notes:
         If delayed_load is set then async_load_data() should be called to complete the loading of the data.
@@ -84,7 +91,7 @@ class HomeConnect(DataClassJsonMixin):
         If auto_update is set to False then subscribe_for_updates() should be called to receive real-time updates to the data
         """
         health = HealthStatus()
-        api = HomeConnectApi(am, lang, health)
+        api = HomeConnectApi(am, lang, health, rate_limiter=rate_limiter)
         hc:HomeConnect = None
         if json_data:
             try:
