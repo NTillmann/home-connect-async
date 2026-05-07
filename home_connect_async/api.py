@@ -7,6 +7,7 @@ from aiohttp import ClientResponse
 
 from .auth import AbstractAuth
 from .common import ConditionalLogger, HomeConnectError, HealthStatus
+from .rate_limiter import TokenBucket
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,11 +44,21 @@ class HomeConnectApi():
             return None
 
 
-    def __init__(self, auth:AbstractAuth, lang:str, health:HealthStatus):
+    def __init__(
+        self,
+        auth:AbstractAuth,
+        lang:str,
+        health:HealthStatus,
+        rate_limiter:TokenBucket|None=None,
+    ):
         self._auth = auth
         self._lang = lang
         self._health = health
         self._call_counter = 0
+        # Default to a TokenBucket sized for the BSH free / developer tier.
+        # See rate_limiter.py for the rationale; callers on paid tiers can
+        # inject a custom-tuned bucket via HomeConnect.async_create().
+        self._rate_limiter = rate_limiter if rate_limiter is not None else TokenBucket()
 
     async def _async_request(self, method:str, endpoint:str, data=None) -> ApiResponse:
         """ Main function to call the Home Connect API over HTTPS """
@@ -56,6 +67,12 @@ class HomeConnectApi():
         response = None
         while retry:
             try:
+                # Pace the request against the per-client_id quota before
+                # touching the network. acquire() is a no-op when tokens
+                # are available and otherwise suspends just long enough
+                # for the bucket to refill — turning a quota-cliff 429
+                # into a few-second wait.
+                await self._rate_limiter.acquire()
                 self._call_counter += 1
 
                 if ConditionalLogger.ismode(ConditionalLogger.LogMode.REQUESTS):
